@@ -34,6 +34,7 @@ export class KafkaAdapter {
         }
 
         try {
+            console.log(`[KafkaAdapter] Sending event ${eventType} to topic ${topic}...`);
             await this.producer.send({
                 topic,
                 messages: [
@@ -50,6 +51,27 @@ export class KafkaAdapter {
             console.log(`Published ${eventType} to ${topic}`);
         } catch (error) {
             console.error(`Failed to publish event to ${topic}`, error);
+        }
+    }
+
+    async publish(topic: string, key: string, message: any): Promise<void> {
+        if (!this.isConnected) {
+            await this.connect();
+        }
+
+        try {
+            console.log(`[KafkaAdapter] Sending RAW event to ${topic} Key=${key}`);
+            await this.producer.send({
+                topic,
+                messages: [
+                    {
+                        key,
+                        value: JSON.stringify(message)
+                    }
+                ]
+            });
+        } catch (error) {
+            console.error(`Failed to publish raw event to ${topic}`, error);
         }
     }
 }

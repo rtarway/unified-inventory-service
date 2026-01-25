@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: unified-inventory-service
+  labels:
+    app: unified-inventory-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: unified-inventory-service
+  template:
+    metadata:
+      labels:
+        app: unified-inventory-service
+    spec:
+      containers:
+      - name: api
+        image: unified-inventory-service:latest # Replace with actual registry image
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+        envFrom:
+        - configMapRef:
+            name: inventory-config
+        - secretRef:
+            name: inventory-secrets
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 15
+          periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: unified-inventory-service
+spec:
+  selector:
+    app: unified-inventory-service
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3000
+  type: ClusterIP

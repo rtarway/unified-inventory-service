@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: inventory-expiry-agent
+spec:
+  schedule: "*/1 * * * *" # Runs every minute
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: expiry-agent
+            image: unified-inventory-service:latest
+            imagePullPolicy: IfNotPresent
+            command: ["npm", "run", "start:expiry", "--", "--run-once"]
+            envFrom:
+            - configMapRef:
+                name: inventory-config
+            - secretRef:
+                name: inventory-secrets
+            resources:
+              requests:
+                memory: "64Mi"
+                cpu: "100m"
+              limits:
+                memory: "256Mi"
+                cpu: "200m"
+          restartPolicy: OnFailure

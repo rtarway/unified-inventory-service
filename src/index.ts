@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { InventoryService } from './services/inventory-service';
+import { startExpiryAgent } from './jobs/expiry-agent';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -14,6 +15,9 @@ const inventoryService = new InventoryService();
 // Init connections
 inventoryService.init().then(() => {
     console.log('Inventory Service Initialized');
+
+    // Start Expiry Agent (Background)
+    startExpiryAgent(60000); // Check every 60s
 }).catch(err => {
     console.error('Failed to init services', err);
 });
@@ -55,12 +59,61 @@ app.post('/inventory/query', async (req, res) => {
 // POST /reservations
 app.post('/reservations', async (req, res) => {
     try {
-        const { orderId, sku, qty, locationId, type } = req.body;
+        const { orderId, sku, qty, locationId, type, ttlMinutes } = req.body;
         if (!orderId || !sku || !qty) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
-        const result = await inventoryService.createReservation(orderId, sku, qty, locationId || "WEB", type || 'SOFT');
+        const result = await inventoryService.createReservation(
+            orderId,
+            sku,
+            qty,
+            locationId || "WEB",
+            type || 'SOFT',
+            ttlMinutes ? parseInt(ttlMinutes) : 15
+        );
+        res.json(result);
+    } catch (e: any) {
+        res.status(400).json({ error: e.message });
+    }
+});
+
+// POST /shipments
+app.post('/shipments', async (req, res) => {
+    try {
+        const { orderId, sku } = req.body;
+        if (!orderId || !sku) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+        const result = await inventoryService.shipAllocation(orderId, sku);
+        res.json(result);
+    } catch (e: any) {
+        res.status(400).json({ error: e.message });
+    }
+});
+
+// POST /allocations
+app.post('/allocations', async (req, res) => {
+    try {
+        const { orderId, sku, qty, locationId } = req.body;
+        if (!orderId || !sku || !qty) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+        const result = await inventoryService.createAllocation(orderId, sku, qty, locationId || "WEB");
+        res.json(result);
+    } catch (e: any) {
+        res.status(400).json({ error: e.message });
+    }
+});
+
+// POST /cancellations
+app.post('/cancellations', async (req, res) => {
+    try {
+        const { orderId, sku } = req.body;
+        if (!orderId || !sku) {
+            return res.status(400).json({ error: 'Missing required fields' });
+        }
+        const result = await inventoryService.createCancellation(orderId, sku);
         res.json(result);
     } catch (e: any) {
         res.status(400).json({ error: e.message });

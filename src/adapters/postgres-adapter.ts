@@ -69,6 +69,16 @@ export class PostgresAdapter {
         await this.pool.query(query, [reservationId, orderId, sku, locationId, qty, type]);
     }
 
+    async getReservation(orderId: string, sku: string): Promise<any> {
+        const query = `
+            SELECT * FROM reservations 
+            WHERE order_id = $1 AND sku = $2 
+            ORDER BY created_at DESC LIMIT 1
+        `;
+        const res = await this.pool.query(query, [orderId, sku]);
+        return res.rows[0];
+    }
+
     async updateReservationStatus(reservationId: string, status: 'CONSUMED' | 'CANCELLED' | 'EXPIRED'): Promise<void> {
         const query = `UPDATE reservations SET status = $1, updated_at = NOW() WHERE reservation_id = $2`;
         await this.pool.query(query, [status, reservationId]);
@@ -90,5 +100,49 @@ export class PostgresAdapter {
 
         const res = await this.pool.query(query, params);
         return parseInt(res.rows[0].total || '0');
+    }
+
+    async getExpiredReservations(): Promise<any[]> {
+        const query = `
+            SELECT * FROM reservations
+            WHERE status = 'ACTIVE'
+            AND expires_at IS NOT NULL
+            AND expires_at < NOW()
+        `;
+        const res = await this.pool.query(query);
+        return res.rows;
+    }
+
+    // --- Allocations ---
+
+    async createAllocation(
+        allocationId: string,
+        orderId: string,
+        sku: string,
+        qty: number,
+        locationId: string,
+        reservationId?: string
+    ): Promise<void> {
+        const query = `
+            INSERT INTO allocations (allocation_id, order_id, sku, qty, location_id, reservation_id, status)
+            VALUES ($1, $2, $3, $4, $5, $6, 'ALLOCATED')
+        `;
+        await this.pool.query(query, [allocationId, orderId, sku, qty, locationId, reservationId]);
+    }
+
+    async getAllocation(orderId: string, sku: string): Promise<any> {
+        const query = `
+            SELECT * FROM allocations 
+            WHERE order_id = $1 AND sku = $2 
+            AND status = 'ALLOCATED'
+            ORDER BY created_at DESC LIMIT 1
+        `;
+        const res = await this.pool.query(query, [orderId, sku]);
+        return res.rows[0];
+    }
+
+    async updateAllocationStatus(allocationId: string, status: 'SHIPPED' | 'CANCELLED'): Promise<void> {
+        const query = `UPDATE allocations SET status = $1, updated_at = NOW() WHERE allocation_id = $2`;
+        await this.pool.query(query, [status, allocationId]);
     }
 }

@@ -24,34 +24,33 @@ export class InventoryService {
      * Aggregates On-Hand (Redis), Future (Postgres), and Reservations (Postgres).
      */
     async getUnifiedPosition(sku: string, locationId: string = "WEB", futureWindowDays: number = 30) {
-        const [onHand, futureInventory, reservedQty] = await Promise.all([
+        const [onHandAvailable, futureInventory, futureReservations] = await Promise.all([
             this.redis.getOnHand(sku, locationId),
             this.postgres.getInboundInventory(sku, locationId, futureWindowDays),
-            this.postgres.getActiveReservations(sku, locationId)
+            // We assume future reservations are tracked separately if needed, 
+            // for now we assume they are included in getting active reservations logic if we extended it.
+            // But per new formula: ATP = Redis.OnHandAvailable + (Future.Total)
+            // Note: If you have Future Reservations, they subtract from Future Total.
+            // Simplified for Phase 1: Future is unreserved.
+            Promise.resolve(0)
         ]);
 
         const futureTotal = futureInventory.reduce((sum: number, item: any) => sum + item.qty_remaining, 0);
 
-        // Simple ATP Calculation
-        // ATP = (OnHand + Future) - Reserved
-        // Note: This is a simplified view. Real logic might separate ATP_ON_HAND vs ATP_FUTURE.
-
-        const atp = (onHand + futureTotal) - reservedQty;
+        // New ATP Formula: Redis OnHand is ALREADY Net Available (Physical - Reserved)
+        const atp = onHandAvailable + (futureTotal - futureReservations);
 
         return {
             sku,
             locationId,
             onHand: {
-                total: onHand,
+                available: onHandAvailable,
                 source: 'Redis'
             },
             future: {
                 total: futureTotal,
                 windowDays: futureWindowDays,
-                details: futureInventory // List of ASNs
-            },
-            reservations: {
-                total: reservedQty,
+                details: futureInventory
             },
             atp
         };
@@ -66,31 +65,48 @@ export class InventoryService {
         return Promise.all(promises);
     }
 
-    async createReservation(orderId: string, sku: string, qty: number, locationId: string, type: 'SOFT' | 'HARD') {
-        // 1. Check Availability (Optional enforcing)
-        // For now, we allow over-reservation but return warning? 
-        // Or we enforce? Let's assume we enforce ATP > 0 for HARD reservations.
-
+    async createReservation(orderId: string, sku: string, qty: number, locationId: string, type: 'SOFT' | 'HARD', ttlMinutes: number = 15) {
         const pos = await this.getUnifiedPosition(sku, locationId);
         if (type === 'HARD' && pos.atp < qty) {
             throw new Error(`Insufficient ATP for Hard Reservation. Available: ${pos.atp}, Requested: ${qty}`);
         }
 
         const reservationId = `RES-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        await this.postgres.createReservation(reservationId, orderId, sku, qty, type, locationId);
+        await this.postgres.createReservation(reservationId, orderId, sku, qty, type, locationId, ttlMinutes);
 
-        // Publish Event for Control Tower
-        await this.kafka.publishEvent('inventory.events', 'RESERVATION_CREATED', {
-            reservationId,
-            orderId,
-            sku,
-            qty,
-            type,
-            locationId,
-            status: 'CREATED'
+        // Publish Event: INVENTORY_RESERVED
+        // Stream Processor will decrement Redis OnHand
+        // Publish Event: INVENTORY_RESERVED (Raw for Processor)
+        const eventId = `${locationId}-${sku}`;
+        await this.kafka.publish('events-input', eventId, {
+            id: eventId,
+            value: -qty,
+            type: 'NORMAL',
+            timestamp: new Date().toISOString(),
+            metadata: []
         });
 
         return { reservationId, status: 'CREATED' };
+    }
+
+    async shipAllocation(orderId: string, sku: string) {
+        const allocation = await this.postgres.getAllocation(orderId, sku);
+        if (!allocation) {
+            throw new Error(`No active allocation found for Order ${orderId}`);
+        }
+
+        await this.postgres.updateAllocationStatus(allocation.allocation_id, 'SHIPPED');
+
+        // Optional: Publish INVENTORY_SHIPPED event for audit trail
+        // No impact on OnHand (already deducted)
+        const eventId = `${allocation.location_id}-${sku}`;
+        await this.kafka.publishEvent('events-input', 'INVENTORY_SHIPPED', {
+            allocationId: allocation.allocation_id,
+            orderId,
+            sku
+        });
+
+        return { allocationId: allocation.allocation_id, status: 'SHIPPED' };
     }
 
     async cancelReservation(reservationId: string) {
@@ -98,7 +114,7 @@ export class InventoryService {
         await this.postgres.updateReservationStatus(reservationId, 'CANCELLED');
 
         // 2. Publish Event
-        await this.kafka.publishEvent('inventory.events', 'RESERVATION_CANCELLED', {
+        await this.kafka.publishEvent('events-input', 'RESERVATION_CANCELLED', {
             reservationId,
             status: 'CANCELLED'
         });
@@ -106,45 +122,133 @@ export class InventoryService {
         return { reservationId, status: 'CANCELLED' };
     }
 
-    async allocateInventory(orderId: string, sku: string, qty: number, locationId: string = "WEB") {
-        // 1. Ideally, we link allocation to a reservation. 
-        // For simplicity, we assume the reservation exists and is active for this order.
-        // In a real system, we'd lookup the reservation ID by Order ID.
-        // Here, we'll assume we are converting "Reserve" -> "Allocated" for the Order.
+    async createAllocation(orderId: string, sku: string, qty: number, locationId: string) {
+        // Logic: Check for EXISTING Reservation
+        const reservation = await this.postgres.getReservation(orderId, sku);
+        const allocationId = `ALLOC-${Date.now()}`;
 
-        // Check if reservation exists for order?
-        // Skipped for simplicity. We will just Decrement OnHand.
+        if (reservation && reservation.status === 'ACTIVE') {
+            const isSoftNetwork = (reservation.type === 'SOFT' && reservation.location_id !== locationId);
+            const isHardMatch = (reservation.location_id === locationId);
 
-        // 2. Decrement OnHand (Atomic)
-        const newOnHand = await this.redis.incrementOnHand(sku, locationId, -qty);
+            // Mark Reservation Consumed
+            await this.postgres.updateReservationStatus(reservation.reservation_id, 'CONSUMED');
 
-        // 3. Publish Event
-        await this.kafka.publishEvent('inventory.events', 'INVENTORY_ALLOCATED', {
-            orderId,
-            sku,
-            qty,
-            locationId,
-            newOnHand,
-            status: 'ALLOCATED'
-        });
+            if (isSoftNetwork) {
+                // Scenario: Soft Res at Network, Alloc at Store
+                // 1. Release Network Hold
+                // 1. Release Network Hold (Add back to Network)
+                const releaseId = `${reservation.location_id}-${sku}`;
+                await this.kafka.publish('events-input', releaseId, {
+                    id: releaseId,
+                    value: qty,
+                    type: 'NORMAL',
+                    timestamp: new Date().toISOString(),
+                    metadata: []
+                });
+                // 2. Consume at Store (Alloc Event)
+                // 2. Consume at Store (Subtract from Store)
+                const allocId = `${locationId}-${sku}`;
+                await this.kafka.publish('events-input', allocId, {
+                    id: allocId,
+                    value: -qty,
+                    type: 'NORMAL',
+                    timestamp: new Date().toISOString(),
+                    metadata: []
+                });
+            } else {
+                // Hard Match or Soft Match at same location
+                // Inventory already decremented at Reservation. No Kafka Event needed for Availability decrement.
+                // But we might want an event for tracing. For Availability logic: NO EVENT.
+                console.log(`Allocation consumed local reservation ${reservation.reservation_id}. No availability change.`);
+            }
 
-        return { orderId, status: 'ALLOCATED', newOnHand };
+            await this.postgres.createAllocation(allocationId, orderId, sku, qty, locationId, reservation.reservation_id);
+            return { allocationId, status: 'ALLOCATED', strategy: 'CONSUMED_RESERVATION' };
+
+        } else {
+            // No Active Reservation (Walk-in or Expired)
+            // Create Allocation
+            await this.postgres.createAllocation(allocationId, orderId, sku, qty, locationId);
+
+            // Publish Event: INVENTORY_ALLOCATED (Decrements Redis)
+            // Publish Event: INVENTORY_ALLOCATED (Decrements Redis)
+            const allocId = `${locationId}-${sku}`;
+            await this.kafka.publish('events-input', allocId, {
+                id: allocId,
+                value: -qty,
+                type: 'NORMAL',
+                timestamp: new Date().toISOString(),
+                metadata: []
+            });
+
+            return { allocationId, status: 'ALLOCATED', strategy: 'FRESH_ALLOCATION' };
+        }
     }
 
-    async cancelAllocation(orderId: string, sku: string, qty: number, locationId: string = "WEB") {
-        // 1. Revert OnHand
-        const newOnHand = await this.redis.incrementOnHand(sku, locationId, qty);
+    async expireReservations() {
+        // 1. Find Expired
+        const expiredList = await this.postgres.getExpiredReservations();
+        let processedCount = 0;
 
-        // 2. Publish Event
-        await this.kafka.publishEvent('inventory.events', 'ALLOCATION_CANCELLED', {
-            orderId,
-            sku,
-            qty,
-            locationId,
-            newOnHand,
-            status: 'ALLOCATION_CANCELLED'
-        });
+        for (const res of expiredList) {
+            // 2. Mark EXPIRED
+            await this.postgres.updateReservationStatus(res.reservation_id, 'EXPIRED');
 
-        return { orderId, status: 'ALLOCATION_CANCELLED', newOnHand };
+            // 3. Publish Event
+            // 3. Publish Event
+            const releaseId = `${res.location_id}-${res.sku}`;
+            await this.kafka.publish('events-input', releaseId, {
+                id: releaseId,
+                value: res.qty,
+                type: 'NORMAL',
+                timestamp: new Date().toISOString(),
+                metadata: []
+            });
+            processedCount++;
+        }
+
+        if (processedCount > 0) {
+            console.log(`Expired ${processedCount} reservations.`);
+        }
+        return processedCount;
+    }
+
+    async createCancellation(orderId: string, sku: string) {
+        // 1. Check Allocation
+        const allocation = await this.postgres.getAllocation(orderId, sku);
+        if (allocation) {
+            await this.postgres.updateAllocationStatus(allocation.allocation_id, 'CANCELLED');
+            // Release Inventory
+            // Release Inventory
+            const releaseId = `${allocation.location_id}-${sku}`;
+            await this.kafka.publish('events-input', releaseId, {
+                id: releaseId,
+                value: allocation.qty,
+                type: 'NORMAL',
+                timestamp: new Date().toISOString(),
+                metadata: []
+            });
+            return { status: 'CANCELLED', source: 'ALLOCATION' };
+        }
+
+        // 2. Check Reservation
+        const reservation = await this.postgres.getReservation(orderId, sku);
+        if (reservation && reservation.status === 'ACTIVE') {
+            await this.postgres.updateReservationStatus(reservation.reservation_id, 'CANCELLED');
+            // Release Inventory
+            // Release Inventory
+            const releaseId = `${reservation.location_id}-${sku}`;
+            await this.kafka.publish('events-input', releaseId, {
+                id: releaseId,
+                value: reservation.qty,
+                type: 'NORMAL',
+                timestamp: new Date().toISOString(),
+                metadata: []
+            });
+            return { status: 'CANCELLED', source: 'RESERVATION' };
+        }
+
+        throw new Error(`No active allocation or reservation found for Order ${orderId}`);
     }
 }
