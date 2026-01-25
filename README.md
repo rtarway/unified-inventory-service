@@ -1,5 +1,8 @@
 # Unified Inventory Service
 
+> **Status**: In Development
+
+
 ## Business Problem
 In modern supply chains, inventory data is often fragmented across multiple systems:
 - **On-Hand Inventory**: Live stock levels in warehouses/stores.
