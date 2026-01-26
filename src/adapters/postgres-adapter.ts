@@ -96,6 +96,15 @@ export class PostgresAdapter {
         await this.pool.query(query, values);
     }
 
+    async updateASNItemReceived(asnId: string, sku: string, qty: number): Promise<void> {
+        const query = `
+            UPDATE asn_items 
+            SET qty_received = qty_received + $1 
+            WHERE asn_id = $2 AND sku = $3
+        `;
+        await this.pool.query(query, [qty, asnId, sku]);
+    }
+
     // --- Reservations ---
 
     async createReservation(

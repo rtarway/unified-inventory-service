@@ -17,6 +17,13 @@ export class InventoryService {
         await this.redis.connect();
         await this.postgres.connect();
         await this.kafka.connect();
+
+        // Subscribe to Receipt Events
+        // We assume the Warehouse WMS publishes to 'events-output' or similar, 
+        // OR we use 'events-input' if we treat it as an input event. Requirements say "inventory-receipt" or "inventory-stream".
+        // Let's use 'events-input' and filter for type='RECEIPT' or a dedicated topic.
+        // Implementation Plan said: "subscribing to events-input (filtering for Receipt types)"
+        await this.kafka.subscribe('events-warehouse', this.handleReceipt.bind(this));
     }
 
     /**
@@ -287,5 +294,58 @@ export class InventoryService {
         // If updating Date, we *could* check for broken promises here.
         // For Phase 1-2, just update DB.
         return { asnId, status: 'UPDATED' };
+        return { asnId, status: 'UPDATED' };
+    }
+
+    // --- Receipt Lifecycle ---
+
+    async handleReceipt(message: any) {
+        // Expected Message: { type: 'RECEIPT', asnId, sku, qty, locationId }
+        // If message structure is different, we parse it. 
+        // Assuming simple payload for now.
+
+        // Filter
+        if (message.type !== 'RECEIPT') return;
+
+        console.log(`[InventoryService] Processing Receipt: ${message.asnId} ${message.sku} (+${message.qty})`);
+        const { asnId, sku, qty, locationId } = message;
+
+        // 1. Update ASN (Qty Received)
+        await this.postgres.updateASNItemReceived(asnId, sku, qty);
+
+        // 2. Migrate Future Reservations
+        const futureRes = await this.postgres.getFutureReservations(sku);
+        let remainingReceipt = qty;
+
+        for (const res of futureRes) {
+            if (remainingReceipt <= 0) break;
+
+            const migrateQty = Math.min(res.qty, remainingReceipt);
+
+            // If full reservation covered
+            if (migrateQty === res.qty) {
+                console.log(`[InventoryService] Migrating Reservation ${res.reservation_id} to ON_HAND`);
+                await this.postgres.updateReservationType(res.reservation_id, 'ON_HAND');
+
+                // Publish Reserve Event to decrement physical availability in Redis
+                // (Since Receipt Event increments Redis, this migration 'consumes' that increment for the reservation)
+                const eventId = `${locationId}-${sku}`;
+                await this.kafka.publish('events-input', eventId, {
+                    id: eventId,
+                    value: -res.qty, // Decrement
+                    type: 'MIGRATED',
+                    timestamp: new Date().toISOString(),
+                    metadata: { reservationId: res.reservation_id }
+                });
+
+                remainingReceipt -= res.qty;
+            } else {
+                // Partial migration? 
+                // Complex. For Phase 3, we assume simplifiction: Migration only if fully covered OR split logic.
+                // Requirements didn't specify partial split. 
+                // Let's skip partial for now or implement "Split Reservation" later.
+                console.log(`[InventoryService] Skipping partial migration for ${res.reservation_id}`);
+            }
+        }
     }
 }

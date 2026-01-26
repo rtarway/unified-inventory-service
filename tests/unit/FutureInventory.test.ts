@@ -11,18 +11,20 @@ const mockRedis = {
 
 const mockPostgres = {
     connect: jest.fn(),
-    createASN: jest.fn(),
-    updateASN: jest.fn(),
     getInboundInventory: jest.fn(),
     createReservation: jest.fn(),
+    createASN: jest.fn(),
     getFutureReservations: jest.fn(),
-    getActiveReservations: jest.fn()
+    getActiveReservations: jest.fn(),
+    updateASNItemReceived: jest.fn(),
+    updateReservationType: jest.fn()
 };
 
 const mockKafka = {
     connect: jest.fn(),
     publish: jest.fn(),
-    publishEvent: jest.fn()
+    publishEvent: jest.fn(),
+    subscribe: jest.fn()
 };
 
 // Mock Constructor Injection
@@ -106,5 +108,41 @@ describe('InventoryService - Future Inventory', () => {
         // Act & Assert
         await expect(service.createReservation('ORD-FAIL', 'SKU-1', 5, 'WEB', 'HARD', 15, 'ON_HAND'))
             .rejects.toThrow('Insufficient ATP');
+    });
+
+    test('handleReceipt should migrate Future Reservations to OnHand', async () => {
+        // Arrange
+        const receiptMsg = { type: 'RECEIPT', asnId: 'ASN-1', sku: 'SKU-FUT', qty: 100, locationId: 'WEB' };
+
+        // Mock DB: 1 Future Reservation for 20 units
+        mockPostgres.getFutureReservations.mockResolvedValue([
+            { reservation_id: 'RES-FUT-1', sku: 'SKU-FUT', qty: 20, inventory_type: 'FUTURE' }
+        ]);
+
+        // Act
+        await service.handleReceipt(receiptMsg);
+
+        // Assert
+        // 1. Update ASN
+        expect(mockPostgres.updateASNItemReceived).toHaveBeenCalledWith('ASN-1', 'SKU-FUT', 100);
+
+        // 2. Migrate Reservation
+        expect(mockPostgres.updateReservationType).toHaveBeenCalledWith('RES-FUT-1', 'ON_HAND');
+
+        // 3. Publish MIGRATED Event (Decrement Redis)
+        expect(mockKafka.publish).toHaveBeenCalledWith(
+            'events-input',
+            'WEB-SKU-FUT',
+            expect.objectContaining({
+                value: -20,
+                type: 'MIGRATED',
+                metadata: { reservationId: 'RES-FUT-1' }
+            })
+        );
+    });
+
+    test('handleReceipt should Ignore non-Receipt messages', async () => {
+        await service.handleReceipt({ type: 'OTHER' });
+        expect(mockPostgres.updateASNItemReceived).not.toHaveBeenCalled();
     });
 });
