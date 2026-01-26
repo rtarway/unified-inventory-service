@@ -14,7 +14,7 @@ This fragmentation leads to:
 ## Solution
 The **Unified Inventory Service** provides a single, aggregated view of inventory "Position". It calculates **Available to Promise (ATP)** by synthesizing data from three sources in real-time:
 
-`ATP = (On-Hand + Future Inventory) - Reservable Quantity`
+`ATP = (On-Hand + Future Inventory) - Reservaed Quantity`
 
 Key capabilities:
 - **Unified Query**: Single API to get the complete inventory picture for a SKU.
