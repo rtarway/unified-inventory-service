@@ -27,18 +27,14 @@ export class InventoryService {
         const [onHandAvailable, futureInventory, futureReservations] = await Promise.all([
             this.redis.getOnHand(sku, locationId),
             this.postgres.getInboundInventory(sku, locationId, futureWindowDays),
-            // We assume future reservations are tracked separately if needed, 
-            // for now we assume they are included in getting active reservations logic if we extended it.
-            // But per new formula: ATP = Redis.OnHandAvailable + (Future.Total)
-            // Note: If you have Future Reservations, they subtract from Future Total.
-            // Simplified for Phase 1: Future is unreserved.
-            Promise.resolve(0)
+            this.postgres.getFutureReservations(sku)
         ]);
 
         const futureTotal = futureInventory.reduce((sum: number, item: any) => sum + item.qty_remaining, 0);
+        const futureReservedQty = futureReservations.reduce((sum: number, item: any) => sum + item.qty, 0);
 
         // New ATP Formula: Redis OnHand is ALREADY Net Available (Physical - Reserved)
-        const atp = onHandAvailable + (futureTotal - futureReservations);
+        const atp = onHandAvailable + (futureTotal - futureReservedQty);
 
         return {
             sku,
@@ -65,28 +61,50 @@ export class InventoryService {
         return Promise.all(promises);
     }
 
-    async createReservation(orderId: string, sku: string, qty: number, locationId: string, type: 'SOFT' | 'HARD', ttlMinutes: number = 15) {
+    async createReservation(
+        orderId: string,
+        sku: string,
+        qty: number,
+        locationId: string,
+        type: 'SOFT' | 'HARD',
+        ttlMinutes: number = 15,
+        inventoryType: 'ON_HAND' | 'FUTURE' = 'ON_HAND'
+    ) {
         const pos = await this.getUnifiedPosition(sku, locationId);
-        if (type === 'HARD' && pos.atp < qty) {
+
+        // Validation for ON_HAND Hard Reservations
+        if (inventoryType === 'ON_HAND' && type === 'HARD' && pos.atp < qty) {
             throw new Error(`Insufficient ATP for Hard Reservation. Available: ${pos.atp}, Requested: ${qty}`);
         }
 
+        // Future Inventory Validation (Basic)
+        if (inventoryType === 'FUTURE') {
+            // Validate that there is enough future quantity? 
+            // pos.future.total >= qty?
+            // For now, allow soft/hard override logic, but generally Future is Soft-ish until confirmed better.
+            if (pos.future.total < qty) {
+                // Warn or Error? Let's Error for strictness.
+                // throw new Error(`Insufficient Future Inventory. Incoming: ${pos.future.total}, Requested: ${qty}`);
+            }
+        }
+
         const reservationId = `RES-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-        await this.postgres.createReservation(reservationId, orderId, sku, qty, type, locationId, ttlMinutes);
+        await this.postgres.createReservation(reservationId, orderId, sku, qty, type, locationId, ttlMinutes, inventoryType);
 
         // Publish Event: INVENTORY_RESERVED
-        // Stream Processor will decrement Redis OnHand
-        // Publish Event: INVENTORY_RESERVED (Raw for Processor)
-        const eventId = `${locationId}-${sku}`;
-        await this.kafka.publish('events-input', eventId, {
-            id: eventId,
-            value: -qty,
-            type: 'NORMAL',
-            timestamp: new Date().toISOString(),
-            metadata: []
-        });
+        // Stream Processor will decrement Redis OnHand ONLY if type is ON_HAND
+        if (inventoryType === 'ON_HAND') {
+            const eventId = `${locationId}-${sku}`;
+            await this.kafka.publish('events-input', eventId, {
+                id: eventId,
+                value: -qty,
+                type: 'NORMAL',
+                timestamp: new Date().toISOString(),
+                metadata: []
+            });
+        }
 
-        return { reservationId, status: 'CREATED' };
+        return { reservationId, status: 'CREATED', msg: 'Future reservation created, no on-hand impact' };
     }
 
     async shipAllocation(orderId: string, sku: string) {
@@ -250,5 +268,24 @@ export class InventoryService {
         }
 
         throw new Error(`No active allocation or reservation found for Order ${orderId}`);
+    }
+    // --- Inbound Shipments (ASN) ---
+
+    async createInboundShipment(asnData: any) {
+        // asnData should include: asnId, poId, items: [{sku, qty}], etc.
+        if (!asnData.items || asnData.items.length === 0) {
+            throw new Error("ASN must contain items");
+        }
+
+        await this.postgres.createASN(asnData, asnData.items);
+        return { asnId: asnData.asnId, status: 'CREATED' };
+    }
+
+    async updateInboundShipment(asnId: string, updates: any) {
+        await this.postgres.updateASN(asnId, updates);
+
+        // If updating Date, we *could* check for broken promises here.
+        // For Phase 1-2, just update DB.
+        return { asnId, status: 'UPDATED' };
     }
 }

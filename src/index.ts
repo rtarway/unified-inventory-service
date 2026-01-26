@@ -59,7 +59,7 @@ app.post('/inventory/query', async (req, res) => {
 // POST /reservations
 app.post('/reservations', async (req, res) => {
     try {
-        const { orderId, sku, qty, locationId, type, ttlMinutes } = req.body;
+        const { orderId, sku, qty, locationId, type, ttlMinutes, inventoryType } = req.body;
         if (!orderId || !sku || !qty) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
@@ -70,7 +70,8 @@ app.post('/reservations', async (req, res) => {
             qty,
             locationId || "WEB",
             type || 'SOFT',
-            ttlMinutes ? parseInt(ttlMinutes) : 15
+            ttlMinutes ? parseInt(ttlMinutes) : 15,
+            inventoryType || 'ON_HAND'
         );
         res.json(result);
     } catch (e: any) {
@@ -117,6 +118,33 @@ app.post('/cancellations', async (req, res) => {
         res.json(result);
     } catch (e: any) {
         res.status(400).json({ error: e.message });
+    }
+});
+
+// POST /asn - Create Inbound Shipment
+app.post('/asn', async (req, res) => {
+    try {
+        const asnData = req.body;
+        // Basic validation
+        if (!asnData.asnId || !asnData.poId || !asnData.items) {
+            return res.status(400).json({ error: 'Missing required fields (asnId, poId, items)' });
+        }
+        const result = await inventoryService.createInboundShipment(asnData);
+        res.json(result);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// PUT /asn/:id - Update Inbound Shipment
+app.put('/asn/:id', async (req, res) => {
+    try {
+        const asnId = req.params.id;
+        const updates = req.body;
+        const result = await inventoryService.updateInboundShipment(asnId, updates);
+        res.json(result);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
     }
 });
 

@@ -18,7 +18,8 @@ const mockPostgres = {
     createAllocation: jest.fn(),
     getAllocation: jest.fn(),
     updateAllocationStatus: jest.fn(),
-    getExpiredReservations: jest.fn()
+    getExpiredReservations: jest.fn(),
+    getFutureReservations: jest.fn()
 };
 
 const mockKafka = {
@@ -50,12 +51,13 @@ describe('Inventory Scenarios: Expiry & Shipping', () => {
         test('should create reservation with short TTL (2 min)', async () => {
             mockRedis.getOnHand.mockResolvedValue(100);
             mockPostgres.getInboundInventory.mockResolvedValue([]);
+            mockPostgres.getFutureReservations.mockResolvedValue([]);
             mockPostgres.getActiveReservations.mockResolvedValue(0);
 
             await service.createReservation('ORD-EXP-1', 'SKU-1', 5, 'WEB', 'SOFT', 2);
 
             expect(mockPostgres.createReservation).toHaveBeenCalledWith(
-                expect.any(String), 'ORD-EXP-1', 'SKU-1', 5, 'SOFT', 'WEB', 2
+                expect.any(String), 'ORD-EXP-1', 'SKU-1', 5, 'SOFT', 'WEB', 2, 'ON_HAND'
             );
         });
 

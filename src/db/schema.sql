@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS reservations (
     location_id VARCHAR(50), -- Optional: If NULL, reserved at network level
     qty INTEGER NOT NULL,
     type VARCHAR(20) NOT NULL, -- SOFT, HARD
+    inventory_type VARCHAR(20) NOT NULL DEFAULT 'ON_HAND' CHECK (inventory_type IN ('ON_HAND', 'FUTURE')),
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE', -- ACTIVE, CONSUMED, CANCELLED, EXPIRED
     expires_at TIMESTAMP WITH TIME ZONE, -- For SOFT reservations
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,

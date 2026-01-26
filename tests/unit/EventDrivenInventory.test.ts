@@ -30,6 +30,7 @@ describe('EventDrivenInventory', () => {
         // Setup ATP
         mockRedis.getOnHand.mockResolvedValue(100);
         mockPostgres.getInboundInventory.mockResolvedValue([]);
+        mockPostgres.getFutureReservations.mockResolvedValue([]);
         // mockPostgres.getActiveReservations assumed unused for ATP now or mocked
 
         // Execute
@@ -38,7 +39,7 @@ describe('EventDrivenInventory', () => {
         // Verify
         expect(mockPostgres.createReservation).toHaveBeenCalledWith(
             expect.stringContaining('RES-'),
-            'ORD-1', 'SKU-A', 5, 'HARD', 'STORE-1', 15
+            'ORD-1', 'SKU-A', 5, 'HARD', 'STORE-1', 15, 'ON_HAND'
         );
         // Note: createReservation uses kafka.publish (raw)
         expect(mockKafka.publish).toHaveBeenCalledWith(

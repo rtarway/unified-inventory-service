@@ -16,7 +16,8 @@ const mockPostgres = {
     getAllocation: jest.fn(),
     createAllocation: jest.fn(),
     updateAllocationStatus: jest.fn(),
-    getReservation: jest.fn()
+    getReservation: jest.fn(),
+    getFutureReservations: jest.fn()
 };
 
 const mockKafka = {
@@ -53,6 +54,7 @@ describe('InventoryService', () => {
         // Note: getActiveReservations is used internally for ATP calculation, but not exposed in response objects currently
         // But we assume it affects ATP
         mockPostgres.getActiveReservations.mockResolvedValue(2);
+        mockPostgres.getFutureReservations.mockResolvedValue([]); // No future reservations
 
         // Act
         const result = await service.getUnifiedPosition('SKU123', 'WEB');
