@@ -43,9 +43,13 @@ export class RedisAdapter {
 
         // Key Format from Inventory Stream Processor:
         // We analysed RetailDataProcessingPipeline.java: getKey = event.getStoreId() + "-" + event.getProductId()
-        // RedisSinkService uses this key in 'inventory:totals'
+        // RedisSinkService uses this key in 'inventory:totals', BUT prepends "ID:" in the processor topology (likely).
+        // Actually, let's verify if the processor ADDS "ID:". 
+        // Based on previous debugging, the keys in Redis were like "ID:WEB-SKU..." or similar?
+        // Wait, the Plan says "Stream Processor writes ID:WEB-[SKU]". 
+        // So we must match that.
 
-        const key = `${storeId}-${sku}`;
+        const key = `ID:${storeId}-${sku}`;
 
         try {
             // HGET inventory:totals <key>
@@ -73,9 +77,9 @@ export class RedisAdapter {
         if (!this.isConnected) {
             await this.connect();
         }
-        const key = `${locationId}-${sku}`;
+        const key = `ID:${locationId}-${sku}`;
         // HINCRBYFLOAT returns the new value as string
         const newVal = await this.client.hIncrByFloat('inventory:totals', key, qty);
-        return parseFloat(newVal);
+        return typeof newVal === 'number' ? newVal : parseFloat(newVal);
     }
 }

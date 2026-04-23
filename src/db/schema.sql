@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS reservations (
     location_id VARCHAR(50), -- Optional: If NULL, reserved at network level
     qty INTEGER NOT NULL,
     type VARCHAR(20) NOT NULL, -- SOFT, HARD
+    inventory_type VARCHAR(20) NOT NULL DEFAULT 'ON_HAND' CHECK (inventory_type IN ('ON_HAND', 'FUTURE')),
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE', -- ACTIVE, CONSUMED, CANCELLED, EXPIRED
     expires_at TIMESTAMP WITH TIME ZONE, -- For SOFT reservations
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -58,3 +59,18 @@ CREATE TABLE IF NOT EXISTS reservations (
 CREATE INDEX IF NOT EXISTS idx_asn_dest_eta ON asns(destination_location_id, estimated_arrival);
 CREATE INDEX IF NOT EXISTS idx_res_sku_status ON reservations(sku, status);
 CREATE INDEX IF NOT EXISTS idx_res_order ON reservations(order_id);
+
+-- 4. Allocations
+CREATE TABLE IF NOT EXISTS allocations (
+    allocation_id VARCHAR(50) PRIMARY KEY,
+    order_id VARCHAR(50) NOT NULL,
+    sku VARCHAR(50) NOT NULL,
+    qty INTEGER NOT NULL,
+    location_id VARCHAR(50),
+    reservation_id VARCHAR(50) REFERENCES reservations(reservation_id),
+    status VARCHAR(20) NOT NULL DEFAULT 'ALLOCATED', -- ALLOCATED, SHIPPED, CANCELLED
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_alloc_order ON allocations(order_id);

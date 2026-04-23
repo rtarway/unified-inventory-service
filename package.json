@@ -5,11 +5,14 @@
     "main": "dist/index.js",
     "scripts": {
         "start": "node dist/index.js",
+        "start:expiry": "node dist/jobs/expiry-agent.js",
         "dev": "nodemon src/index.ts",
         "build": "tsc",
         "clean": "rm -rf dist",
         "clean-build": "npm run clean && npm run build",
-        "test": "jest"
+        "test": "jest tests/unit",
+        "test:e2e": "jest tests/e2e",
+        "test:all": "jest"
     },
     "keywords": [
         "inventory",
