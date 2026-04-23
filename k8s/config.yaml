@@ -4,16 +4,7 @@ metadata:
   name: inventory-config
 data:
   NODE_ENV: "production"
-  # Service URLs (Assuming in-cluster services)
   REDIS_URL: "redis://redis:6379"
-  DATABASE_URL: "postgresql://admin:password@postgres:5432/inventory_future"
   KAFKA_BROKERS: "kafka:9092"
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: inventory-secrets
-type: Opaque
-data:
-  # Base64 encoded values
-  # POSTGRES_PASSWORD: ...
+  # Comma-separated browser origins when clients call the API directly; omit for same-origin only (origin: false)
+  # CORS_ORIGINS: "https://app.example.com"

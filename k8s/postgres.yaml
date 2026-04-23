@@ -21,9 +21,15 @@ spec:
         - containerPort: 5432
         env:
         - name: POSTGRES_USER
-          value: "admin"
+          valueFrom:
+            secretKeyRef:
+              name: inventory-secrets
+              key: POSTGRES_USER
         - name: POSTGRES_PASSWORD
-          value: "password"
+          valueFrom:
+            secretKeyRef:
+              name: inventory-secrets
+              key: POSTGRES_PASSWORD
         - name: POSTGRES_DB
           value: "inventory_future"
         volumeMounts:

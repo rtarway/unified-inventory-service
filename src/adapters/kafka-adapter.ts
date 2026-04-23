@@ -1,5 +1,31 @@
 import { Kafka, Producer, Consumer } from 'kafkajs';
 
+function kafkaConnectionOptions(clientId: string, brokers: string[]) {
+    const options: ConstructorParameters<typeof Kafka>[0] = {
+        clientId,
+        brokers,
+    };
+
+    if (process.env.KAFKA_SSL === 'true' || process.env.KAFKA_SSL === '1') {
+        options.ssl = {
+            rejectUnauthorized: process.env.KAFKA_SSL_REJECT_UNAUTHORIZED !== 'false',
+        };
+    }
+
+    const mech = process.env.KAFKA_SASL_MECHANISM;
+    const username = process.env.KAFKA_SASL_USERNAME;
+    const password = process.env.KAFKA_SASL_PASSWORD ?? '';
+    if (mech === 'plain' && username != null) {
+        options.sasl = { mechanism: 'plain', username, password };
+    } else if (mech === 'scram-sha-256' && username != null) {
+        options.sasl = { mechanism: 'scram-sha-256', username, password };
+    } else if (mech === 'scram-sha-512' && username != null) {
+        options.sasl = { mechanism: 'scram-sha-512', username, password };
+    }
+
+    return options;
+}
+
 export class KafkaAdapter {
     private kafka: Kafka;
     private producer: Producer;
@@ -7,7 +33,7 @@ export class KafkaAdapter {
     private isConnected = false;
 
     constructor(clientId: string = 'unified-inventory-service', brokers: string[] = ['localhost:9092']) {
-        this.kafka = new Kafka({ clientId, brokers });
+        this.kafka = new Kafka(kafkaConnectionOptions(clientId, brokers));
         this.producer = this.kafka.producer();
         this.consumer = this.kafka.consumer({ groupId: `${clientId}-group` });
     }

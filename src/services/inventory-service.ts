@@ -1,6 +1,7 @@
 import { RedisAdapter } from '../adapters/redis-adapter';
 import { PostgresAdapter } from '../adapters/postgres-adapter';
 import { KafkaAdapter } from '../adapters/kafka-adapter';
+import { clampFutureWindowDays, clampTtlMinutes } from '../validation';
 
 export class InventoryService {
     private redis: RedisAdapter;
@@ -31,6 +32,7 @@ export class InventoryService {
      * Aggregates On-Hand (Redis), Future (Postgres), and Reservations (Postgres).
      */
     async getUnifiedPosition(sku: string, locationId: string = "WEB", futureWindowDays: number = 30) {
+        futureWindowDays = clampFutureWindowDays(futureWindowDays);
         const [onHandAvailable, futureInventory, futureReservations] = await Promise.all([
             this.redis.getOnHand(sku, locationId),
             this.postgres.getInboundInventory(sku, locationId, futureWindowDays),
@@ -77,6 +79,7 @@ export class InventoryService {
         ttlMinutes: number = 15,
         inventoryType: 'ON_HAND' | 'FUTURE' = 'ON_HAND'
     ) {
+        ttlMinutes = clampTtlMinutes(ttlMinutes);
         const pos = await this.getUnifiedPosition(sku, locationId);
 
         // Validation for ON_HAND Hard Reservations

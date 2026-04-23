@@ -66,12 +66,15 @@ graph TD
 The project relies on Redis, Postgres, and Kafka running in Kubernetes.
 
 ```bash
-# Start Minikube/Rancher
+# Start Minikube/Rancher — apply secrets before Postgres so credentials exist
+kubectl apply -f k8s/secret.yaml
 kubectl apply -f k8s/config.yaml
 kubectl apply -f k8s/postgres.yaml
 kubectl apply -f k8s/redis.yaml
 kubectl apply -f k8s/kafka.yaml
 ```
+
+Edit [k8s/secret.yaml](k8s/secret.yaml) and set `POSTGRES_PASSWORD` and `DATABASE_URL` to matching values before deploying to any shared or production cluster.
 
 ### 2. Environment Variables
 Create `.env` for local development (if running outside K8s):
@@ -82,6 +85,18 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/inventory_db
 KAFKA_BROKERS=localhost:9092
 PORT=3000
 ```
+
+**Security-related variables**
+
+| Variable | Purpose |
+|----------|---------|
+| `API_TOKEN` | If set, all routes except `GET /health` require `Authorization: Bearer <token>`. |
+| `CORS_ORIGINS` | Comma-separated allowed browser origins. If unset, CORS uses `origin: false` (no cross-origin browser access). |
+| `JSON_BODY_LIMIT` | Express JSON body size cap (default `256kb`). |
+| `MAX_BATCH_SKUS` | Max length of `skus` in `POST /inventory/query` (default `500`, hard cap `10000`). |
+| `KAFKA_SSL` | Set to `true` or `1` to enable TLS to brokers. |
+| `KAFKA_SSL_REJECT_UNAUTHORIZED` | Defaults to verifying server certs; set to `false` only for dev with self-signed brokers. |
+| `KAFKA_SASL_MECHANISM` | Optional: `plain`, `scram-sha-256`, or `scram-sha-512` (requires `KAFKA_SASL_USERNAME` / `KAFKA_SASL_PASSWORD`). |
 
 ### 3. Installation
 ```bash

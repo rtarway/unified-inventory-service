@@ -36,6 +36,7 @@ docker build -t unified-inventory-service:latest .
 
 echo "[3/5] Deploying Infrastructure (Kafka, Redis, Postgres)..."
 kubectl apply -f ../inventory-stream-processor/k8s/infrastructure.yaml
+kubectl apply -f k8s/secret.yaml
 kubectl apply -f k8s/postgres.yaml
 
 echo "      Waiting 10s for Infra to initialize..."

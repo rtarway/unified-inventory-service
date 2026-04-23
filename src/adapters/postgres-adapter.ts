@@ -3,9 +3,13 @@ import { Pool, PoolClient } from 'pg';
 export class PostgresAdapter {
     private pool: Pool;
 
-    constructor(connectionString: string = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/inventory_db') {
+    constructor(connectionString?: string) {
+        const url = connectionString ?? process.env.DATABASE_URL;
+        if (!url) {
+            throw new Error('DATABASE_URL is required');
+        }
         this.pool = new Pool({
-            connectionString,
+            connectionString: url,
         });
 
         this.pool.on('error', (err) => {
@@ -41,10 +45,10 @@ export class PostgresAdapter {
                 ai.sku = $1 
                 AND a.destination_location_id = $2
                 AND a.status IN ('CREATED', 'IN_TRANSIT')
-                AND a.estimated_arrival <= NOW() + interval '${windowDays} days'
+                AND a.estimated_arrival <= NOW() + ($3::integer * interval '1 day')
             ORDER BY a.estimated_arrival ASC
         `;
-        const res = await this.pool.query(query, [sku, locationId]);
+        const res = await this.pool.query(query, [sku, locationId, windowDays]);
         return res.rows;
     }
 
@@ -117,14 +121,16 @@ export class PostgresAdapter {
         ttlMinutes: number = 15,
         inventoryType: 'ON_HAND' | 'FUTURE' = 'ON_HAND'
     ): Promise<void> {
-        const expiresAt = type === 'SOFT' ? `NOW() + interval '${ttlMinutes} minutes'` : 'NULL';
-
         const query = `
             INSERT INTO reservations (reservation_id, order_id, sku, location_id, qty, type, status, expires_at, inventory_type)
-            VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE', ${expiresAt}, $7)
+            VALUES ($1, $2, $3, $4, $5, $6, 'ACTIVE',
+                CASE WHEN $6::text = 'SOFT' THEN NOW() + ($8::integer * interval '1 minute') ELSE NULL END,
+                $7)
         `;
 
-        await this.pool.query(query, [reservationId, orderId, sku, locationId, qty, type, inventoryType]);
+        await this.pool.query(query, [
+            reservationId, orderId, sku, locationId, qty, type, inventoryType, ttlMinutes,
+        ]);
     }
 
     async getReservation(orderId: string, sku: string): Promise<any> {
